@@ -184,7 +184,7 @@ fn config() -> (String, String, u32, u32, bool, f32) {
 
     println!("\n");
 
-    println!("All tests passed! Welcome to: ");
+    println!("All tests passed! And keep in mind:");
 
     println!("\n");
 
