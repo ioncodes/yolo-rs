@@ -1,0 +1,9 @@
+[package]
+name = "yolo"
+version = "0.1.0"
+authors = ["Luca Marcelli <ioncodes@users.noreply.github.com>"]
+
+[dependencies]
+glium = "*"
+clap = "*"
+compress = "*"
