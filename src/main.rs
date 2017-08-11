@@ -1,16 +1,15 @@
 #[macro_use]
 extern crate glium;
 extern crate clap;
-extern crate compress;
+extern crate flate2;
 
 mod window;
 
 use glium::{glutin, Surface};
 use clap::{App, Arg};
-use compress::zlib;
+use flate2::read::GzDecoder;
 use std::fs::File;
 use std::io::prelude::*;
-use std::path::Path;
 
 const DEFAULT_VERTEX: &'static str = include_str!("shaders/default.vert");
 const DEFAULT_WIDTH: u32 = 1024;
@@ -127,11 +126,17 @@ fn config() -> (String, String, u32, u32, bool, f32) {
         .get_matches();
 
     let mut frag = matches.value_of("frag").unwrap().to_string();
+    let frag_name = matches.value_of("frag").unwrap().to_string();
     println!("Loading fragment shader: {}", frag);
 
     if matches.is_present("decompress") {
-        let stream = File::open(&Path::new(&frag)).unwrap();
-        let _ = zlib::Decoder::new(stream).read_to_string(&mut frag);
+        let mut file = File::open(&frag).unwrap();
+        let mut contents = Vec::new();
+        let _ = file.read_to_end(&mut contents).unwrap();
+        let mut d = GzDecoder::new(&contents[..]).unwrap();
+        let mut s = String::new();
+        d.read_to_string(&mut s).unwrap();
+        frag = s;
     } else {
         frag = read_shader(frag);
     }
@@ -168,15 +173,14 @@ fn config() -> (String, String, u32, u32, bool, f32) {
 
     println!("\n");
 
-    println!("==========================");
-    println!("Current profile:");
-    println!("Fragment Shader: {:?}", frag);
+    println!("=======================================");
+    println!("Fragment Shader: {:?}", frag_name);
     println!("Vertex Shader:   {:?}", vertex);
     println!("Screen Width:    {:?}", screen_width);
     println!("Screen Height:   {:?}", screen_height);
     println!("VSync:           {:?}", config_vsync);
     println!("Time:            {:?}", config_time);
-    println!("==========================");
+    println!("=======================================");
 
     println!("\n");
 
@@ -184,17 +188,17 @@ fn config() -> (String, String, u32, u32, bool, f32) {
 
     println!("\n");
 
-    println!(r"  _        _          _            _             _       ");
-    println!(r"/\ \     /\_\       /\ \         _\ \          /\ \      ");
-    println!(r"\ \ \   / / /      /  \ \       /\__ \        /  \ \     ");
-    println!(r" \ \ \_/ / /      / /\ \ \     / /_ \_\      / /\ \ \    ");
-    println!(r"  \ \___/ /      / / /\ \ \   / / /\/_/     / / /\ \ \   ");
-    println!(r"   \ \ \_/      / / /  \ \_\ / / /         / / /  \ \_\  ");
-    println!(r"    \ \ \      / / /   / / // / /         / / /   / / /  ");
-    println!(r"     \ \ \    / / /   / / // / / ____    / / /   / / /   ");
-    println!(r"      \ \ \  / / /___/ / // /_/_/ ___/\ / / /___/ / /    ");
-    println!(r"       \ \_\/ / /____\/ //_______/\__\// / /____\/ /     ");
-    println!(r"        \/_/\/_________/ \_______\/    \/_________/      ");
+    println!(r"  _        _          _            _             _     ");
+    println!(r"/\ \     /\_\       /\ \         _\ \          /\ \    ");
+    println!(r"\ \ \   / / /      /  \ \       /\__ \        /  \ \   ");
+    println!(r" \ \ \_/ / /      / /\ \ \     / /_ \_\      / /\ \ \  ");
+    println!(r"  \ \___/ /      / / /\ \ \   / / /\/_/     / / /\ \ \ ");
+    println!(r"   \ \ \_/      / / /  \ \_\ / / /         / / /  \ \_\");
+    println!(r"    \ \ \      / / /   / / // / /         / / /   / / /");
+    println!(r"     \ \ \    / / /   / / // / / ____    / / /   / / / ");
+    println!(r"      \ \ \  / / /___/ / // /_/_/ ___/\ / / /___/ / /  ");
+    println!(r"       \ \_\/ / /____\/ //_______/\__\// / /____\/ /   ");
+    println!(r"        \/_/\/_________/ \_______\/    \/_________/    ");
 
     println!("\n");
 
