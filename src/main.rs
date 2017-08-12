@@ -2,6 +2,7 @@
 extern crate glium;
 extern crate clap;
 extern crate flate2;
+extern crate notify;
 
 mod window;
 
@@ -13,6 +14,8 @@ use std::io::prelude::*;
 use std::thread;
 use std::io;
 use std::sync::mpsc::{self};
+use notify::{RecommendedWatcher, Watcher, RecursiveMode};
+use std::time::Duration;
 
 const DEFAULT_VERTEX: &'static str = include_str!("shaders/default.vert");
 const DEFAULT_WIDTH: u32 = 1024;
@@ -31,39 +34,82 @@ fn main() {
     let add_time = config.5;
     let interactive = config.6;
     let debug = config.7;
+    let reload = config.8;
+    let frag_name = config.9;
 
     let (tx, rx) = mpsc::channel();
+    let (shader_sender, shader_receiver) = mpsc::channel();
 
-    let gl_thread = thread::spawn(move || setup_window(resolution, add_time, vsync, vertex_shader, fragment_shader, rx, debug));
+    let gl_thread = thread::spawn(move || setup_window(resolution, add_time, vsync, vertex_shader, fragment_shader, rx, shader_receiver, debug));
 
     if interactive {
-        loop {
-            let input = io::stdin();
-            let mut locked_input = input.lock();
-            print!("$ ");
-            let _ = io::stdout().flush();
-            let mut command = String::new();
-            locked_input.read_line(&mut command)
-                        .expect("failed to read from stdin");
-            command = command.trim_right_matches("\r\n").to_owned();
-            if debug { println!("Command: {:?}", command); }
-            if command == "pause" {
-                let _ = tx.send(0);
-            } else if command == "resume" {
-                let _ = tx.send(1);
-            } else if command == "exit" {
-                let _ = tx.send(2);
-                break;
-            }
-        }
+        let _ = thread::spawn(move || run_interactive(debug, tx));
+    }
+
+    if reload {
+        let _ = thread::spawn(move || run_watcher(frag_name, shader_sender));
     }
 
     let _ = gl_thread.join();
 }
 
-fn setup_window(resolution: [u32; 2], add_time: f32, vsync: bool, vertex_shader: String, fragment_shader: String, rx: mpsc::Receiver<i32>, debug: bool) {
+fn show_commands() {
+    println!("pause");
+    println!("resume");
+    println!("exit");
+}
+
+fn run_interactive(debug: bool, tx: mpsc::Sender<i32>) {
+    loop {
+        let input = io::stdin();
+        let mut locked_input = input.lock();
+        print!("$ ");
+        let _ = io::stdout().flush();
+        let mut command = String::new();
+        locked_input.read_line(&mut command)
+                    .expect("failed to read from stdin");
+        command = command.trim_right_matches("\r\n").to_owned();
+        if debug { println!("Command: {:?}", command); }
+        if command == "pause" {
+            let _ = tx.send(0);
+        } else if command == "resume" {
+            let _ = tx.send(1);
+        } else if command == "exit" {
+            let _ = tx.send(2);
+            break;
+        } else if command == "help" {
+            show_commands();
+        } else {
+            println!("Unknown command");
+            show_commands();
+        }
+    }
+}
+
+fn run_watcher(file: String, shader_sender: mpsc::Sender<String>) {
+    let (tx, rx) = mpsc::channel();
+
+    let mut watcher: RecommendedWatcher = Watcher::new(tx, Duration::from_secs(2)).unwrap();
+
+    watcher.watch(&file, RecursiveMode::NonRecursive).unwrap();
+
+    loop {
+        match rx.recv() {
+            Ok(_) => {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                let source = read_shader(file.to_owned());
+                let _ = shader_sender.send(source);
+            },
+            Err(e) => println!("watch error: {:?}", e),
+        }
+    }
+}
+
+fn setup_window(resolution: [u32; 2], add_time: f32, vsync: bool, vertex_shader: String, fragment_shader: String, rx: mpsc::Receiver<i32>, shader_receiver: mpsc::Receiver<String>, debug: bool) {
     let mut window = window::Window::new(resolution, "yolo".to_owned(), vsync);
     let display = window.build_display();
+
+    let mut frag = fragment_shader;
 
     #[derive(Copy, Clone)]
     struct Vertex {
@@ -79,8 +125,8 @@ fn setup_window(resolution: [u32; 2], add_time: f32, vsync: bool, vertex_shader:
         Vertex { position: [ 1.0, -1.0] },
     ]).unwrap();
 
-    let program =
-    glium::Program::from_source(&display, &vertex_shader, &fragment_shader, None)
+    let mut program =
+        glium::Program::from_source(&display, &vertex_shader, &frag, None)
         .unwrap();
 
     let mut closed = false;
@@ -109,6 +155,15 @@ fn setup_window(resolution: [u32; 2], add_time: f32, vsync: bool, vertex_shader:
                     if debug { println!("Unknown mode...") };
                 }
             }
+        }
+        if let Ok(f) = shader_receiver.try_recv() { 
+            frag = f;
+            program =
+                glium::Program::from_source(&display, &vertex_shader, &frag, None)
+                .unwrap();
+            time = 0.0;
+            mouse = [0.0 as f32, 0.0 as f32];
+            println!("Reloaded!");
         }
 
         if !paused {
@@ -148,7 +203,7 @@ fn setup_window(resolution: [u32; 2], add_time: f32, vsync: bool, vertex_shader:
     }
 }
 
-fn config() -> (String, String, u32, u32, bool, f32, bool, bool) {
+fn config() -> (String, String, u32, u32, bool, f32, bool, bool, bool, String) {
     let matches = App::new("yolo")
         .args(&[
             Arg::with_name("vert")
@@ -187,6 +242,10 @@ fn config() -> (String, String, u32, u32, bool, f32, bool, bool) {
                     .help("start in debug mode?")
                     .short("b")
                     .long("debug"),
+            Arg::with_name("reload")
+                    .help("reload on file changes?")
+                    .short("r")
+                    .long("reload"),
             Arg::with_name("frag")
                     .help("the fragment shader to load")
                     .index(1)
@@ -252,6 +311,12 @@ fn config() -> (String, String, u32, u32, bool, f32, bool, bool) {
         config_debug = true;
     }
 
+    let mut config_reload = false;
+    if matches.is_present("reload") {
+        println!("reload mode enabled!");
+        config_reload = true;
+    }
+
     println!("\n");
 
     println!("=======================================");
@@ -263,6 +328,7 @@ fn config() -> (String, String, u32, u32, bool, f32, bool, bool) {
     println!("Time:            {:?}", config_time);
     println!("Interactive:     {:?}", config_interactive);
     println!("Debug:           {:?}", config_debug);
+    println!("Reload:          {:?}", config_reload);
     println!("=======================================");
 
     println!("\n");
@@ -285,7 +351,7 @@ fn config() -> (String, String, u32, u32, bool, f32, bool, bool) {
 
     println!("\n");
 
-    (frag, vertex, screen_width, screen_height, config_vsync, config_time, config_interactive, config_debug)
+    (frag, vertex, screen_width, screen_height, config_vsync, config_time, config_interactive, config_debug, config_reload, frag_name)
 }
 
 fn read_shader(file: String) -> String {

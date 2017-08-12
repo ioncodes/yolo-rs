@@ -7,3 +7,4 @@ authors = ["Luca Marcelli <ioncodes@users.noreply.github.com>"]
 glium = "*"
 clap = "*"
 flate2 = "*"
+notify = "*"
