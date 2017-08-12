@@ -10,6 +10,9 @@ use clap::{App, Arg};
 use flate2::read::GzDecoder;
 use std::fs::File;
 use std::io::prelude::*;
+use std::thread;
+use std::io;
+use std::sync::mpsc::{self};
 
 const DEFAULT_VERTEX: &'static str = include_str!("shaders/default.vert");
 const DEFAULT_WIDTH: u32 = 1024;
@@ -23,12 +26,44 @@ fn main() {
     if config.1 != "" {
         vertex_shader = read_shader(config.1);
     }
-
     let resolution = [config.2, config.3];
-    let mut window = window::Window::new(resolution, "yolo".to_owned(), config.4);
-    let display = window.build_display();
-
+    let vsync = config.4;
     let add_time = config.5;
+    let interactive = config.6;
+    let debug = config.7;
+
+    let (tx, rx) = mpsc::channel();
+
+    let gl_thread = thread::spawn(move || setup_window(resolution, add_time, vsync, vertex_shader, fragment_shader, rx, debug));
+
+    if interactive {
+        loop {
+            let input = io::stdin();
+            let mut locked_input = input.lock();
+            print!("$ ");
+            let _ = io::stdout().flush();
+            let mut command = String::new();
+            locked_input.read_line(&mut command)
+                        .expect("failed to read from stdin");
+            command = command.trim_right_matches("\r\n").to_owned();
+            if debug { println!("Command: {:?}", command); }
+            if command == "pause" {
+                let _ = tx.send(0);
+            } else if command == "resume" {
+                let _ = tx.send(1);
+            } else if command == "exit" {
+                let _ = tx.send(2);
+                break;
+            }
+        }
+    }
+
+    let _ = gl_thread.join();
+}
+
+fn setup_window(resolution: [u32; 2], add_time: f32, vsync: bool, vertex_shader: String, fragment_shader: String, rx: mpsc::Receiver<i32>, debug: bool) {
+    let mut window = window::Window::new(resolution, "yolo".to_owned(), vsync);
+    let display = window.build_display();
 
     #[derive(Copy, Clone)]
     struct Vertex {
@@ -45,49 +80,75 @@ fn main() {
     ]).unwrap();
 
     let program =
-        glium::Program::from_source(&display, &vertex_shader, &fragment_shader, None)
-            .unwrap();
+    glium::Program::from_source(&display, &vertex_shader, &fragment_shader, None)
+        .unwrap();
 
     let mut closed = false;
+    let mut paused = false;
 
+    // Uniforms
     let mut time: f32 = 0.0;
+    let mut mouse = [0.0 as f32, 0.0 as f32];
 
     while !closed {
-        let mut target = display.draw();
-        target.clear_color(0.0, 0.0, 1.0, 1.0);
-        let uniforms =
-            uniform! { 
-                resolution: [resolution[0] as f32, resolution[1] as f32],
-                time: time,
-                mouse: [50.0 as f32, 50.0 as f32],
-            };
+        if let Ok(r) = rx.try_recv() { 
+            match r {
+                0 => {
+                    paused = true;
+                    if debug { println!("Paused") };
+                },
+                1 => {
+                    paused = false;
+                    if debug { println!("Resumed") };
+                },
+                2 => {
+                    closed = true;
+                    if debug { println!("Exiting...") };
+                },
+                _ => {
+                    if debug { println!("Unknown mode...") };
+                }
+            }
+        }
 
-        time += add_time;
+        if !paused {
+            let mut target = display.draw();
+            target.clear_color(0.0, 0.0, 1.0, 1.0);
+            let uniforms =
+                uniform! { 
+                    resolution: [resolution[0] as f32, resolution[1] as f32],
+                    time: time,
+                    mouse: mouse,
+                };
 
-        target
-            .draw(
-                &shape,
-                &glium::index::NoIndices(glium::index::PrimitiveType::TriangleStrip),
-                &program,
-                &uniforms,
-                &Default::default(),
-            )
-            .unwrap();
-        target.finish().unwrap();
+            time += add_time;
 
-    	window.events_loop.poll_events(|event| {
-	        match event {
-	            glutin::Event::WindowEvent{ event, .. } => match event {
-	                glutin::WindowEvent::Closed => closed = true,
-	                _ => ()
-	            },
-	            _ => ()
-	        }
-	    });
-	}
+            target
+                .draw(
+                    &shape,
+                    &glium::index::NoIndices(glium::index::PrimitiveType::TriangleStrip),
+                    &program,
+                    &uniforms,
+                    &Default::default(),
+                )
+                .unwrap();
+            target.finish().unwrap();
+
+            window.events_loop.poll_events(|event| {
+                match event {
+                    glutin::Event::WindowEvent{ event, .. } => match event {
+                        glutin::WindowEvent::Closed => closed = true,
+                        glutin::WindowEvent::MouseMoved { position, .. } => mouse = [position.0 as f32 / resolution[0] as f32, 1.0 - position.1 as f32 / resolution[1] as f32],
+                        _ => ()
+                    },
+                    _ => ()
+                }
+            });
+        }
+    }
 }
 
-fn config() -> (String, String, u32, u32, bool, f32) {
+fn config() -> (String, String, u32, u32, bool, f32, bool, bool) {
     let matches = App::new("yolo")
         .args(&[
             Arg::with_name("vert")
@@ -118,6 +179,14 @@ fn config() -> (String, String, u32, u32, bool, f32) {
                     .help("decompress frag?")
                     .short("d")
                     .long("decompress"),
+            Arg::with_name("interactive")
+                    .help("start in interactive mode?")
+                    .short("i")
+                    .long("interactive"),
+            Arg::with_name("debug")
+                    .help("start in debug mode?")
+                    .short("b")
+                    .long("debug"),
             Arg::with_name("frag")
                     .help("the fragment shader to load")
                     .index(1)
@@ -171,6 +240,18 @@ fn config() -> (String, String, u32, u32, bool, f32) {
         config_time = time.to_string().parse::<f32>().unwrap();
     }
 
+    let mut config_interactive = false;
+    if matches.is_present("interactive") {
+        println!("interactive enabled!");
+        config_interactive = true;
+    }
+
+    let mut config_debug = false;
+    if matches.is_present("debug") {
+        println!("debug mode enabled!");
+        config_debug = true;
+    }
+
     println!("\n");
 
     println!("=======================================");
@@ -180,6 +261,8 @@ fn config() -> (String, String, u32, u32, bool, f32) {
     println!("Screen Height:   {:?}", screen_height);
     println!("VSync:           {:?}", config_vsync);
     println!("Time:            {:?}", config_time);
+    println!("Interactive:     {:?}", config_interactive);
+    println!("Debug:           {:?}", config_debug);
     println!("=======================================");
 
     println!("\n");
@@ -202,7 +285,7 @@ fn config() -> (String, String, u32, u32, bool, f32) {
 
     println!("\n");
 
-    (frag, vertex, screen_width, screen_height, config_vsync, config_time)
+    (frag, vertex, screen_width, screen_height, config_vsync, config_time, config_interactive, config_debug)
 }
 
 fn read_shader(file: String) -> String {
