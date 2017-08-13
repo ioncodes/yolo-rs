@@ -6,7 +6,7 @@ extern crate notify;
 
 mod window;
 
-use glium::{glutin, Surface};
+use glium::{glutin, Surface, Api, Profile, Version};
 use clap::{App, Arg};
 use flate2::read::GzDecoder;
 use std::fs::File;
@@ -36,11 +36,13 @@ fn main() {
     let debug = config.7;
     let reload = config.8;
     let frag_name = config.9;
+    let msaa = config.10;
+    let borderless = config.11;
 
     let (tx, rx) = mpsc::channel();
     let (shader_sender, shader_receiver) = mpsc::channel();
 
-    let gl_thread = thread::spawn(move || setup_window(resolution, add_time, vsync, vertex_shader, fragment_shader, rx, shader_receiver, debug));
+    let gl_thread = thread::spawn(move || setup_window(resolution, add_time, vsync, vertex_shader, fragment_shader, rx, shader_receiver, debug, msaa, borderless));
 
     if interactive {
         let _ = thread::spawn(move || run_interactive(debug, tx));
@@ -105,9 +107,13 @@ fn run_watcher(file: String, shader_sender: mpsc::Sender<String>) {
     }
 }
 
-fn setup_window(resolution: [u32; 2], add_time: f32, vsync: bool, vertex_shader: String, fragment_shader: String, rx: mpsc::Receiver<i32>, shader_receiver: mpsc::Receiver<String>, debug: bool) {
-    let mut window = window::Window::new(resolution, "yolo".to_owned(), vsync);
+fn setup_window(resolution: [u32; 2], add_time: f32, vsync: bool, vertex_shader: String, fragment_shader: String, rx: mpsc::Receiver<i32>, shader_receiver: mpsc::Receiver<String>, debug: bool, msaa: u16, borderless: bool) {
+    let mut window = window::Window::new(resolution, "yolo".to_owned(), vsync, msaa, borderless);
     let display = window.build_display();
+
+    if debug {
+        print_opengl_info(&display);
+    }
 
     let mut frag = fragment_shader;
 
@@ -203,7 +209,7 @@ fn setup_window(resolution: [u32; 2], add_time: f32, vsync: bool, vertex_shader:
     }
 }
 
-fn config() -> (String, String, u32, u32, bool, f32, bool, bool, bool, String) {
+fn config() -> (String, String, u32, u32, bool, f32, bool, bool, bool, String, u16, bool) {
     let matches = App::new("yolo")
         .args(&[
             Arg::with_name("vert")
@@ -226,6 +232,11 @@ fn config() -> (String, String, u32, u32, bool, f32, bool, bool, bool, String) {
                     .takes_value(true)
                     .short("t")
                     .long("time"),
+            Arg::with_name("msaa")
+                    .help("MSAA level [2,4,8,16]")
+                    .takes_value(true)
+                    .short("m")
+                    .long("msaa"),
             Arg::with_name("vsync")
                     .help("enable vsync?")
                     .short("s")
@@ -246,6 +257,10 @@ fn config() -> (String, String, u32, u32, bool, f32, bool, bool, bool, String) {
                     .help("reload on file changes?")
                     .short("r")
                     .long("reload"),
+            Arg::with_name("borderless")
+                    .help("Open borderless?")
+                    .short("l")
+                    .long("borderless"),
             Arg::with_name("frag")
                     .help("the fragment shader to load")
                     .index(1)
@@ -287,6 +302,12 @@ fn config() -> (String, String, u32, u32, bool, f32, bool, bool, bool, String) {
         screen_height = height.to_string().parse::<u32>().unwrap();
     }
 
+    let mut config_msaa: u16 = 0;
+    if let Some(msaa) = matches.value_of("msaa") {
+        println!("Setting MSAA to: {}", msaa);
+        config_msaa = msaa.to_string().parse::<u16>().unwrap();
+    }
+
     let mut config_vsync = false;
     if matches.is_present("vsync") {
         println!("vsync enabled!");
@@ -317,6 +338,12 @@ fn config() -> (String, String, u32, u32, bool, f32, bool, bool, bool, String) {
         config_reload = true;
     }
 
+    let mut config_borderless = false;
+    if matches.is_present("borderless") {
+        println!("borderless mode enabled!");
+        config_borderless = true;
+    }
+
     println!("\n");
 
     println!("=======================================");
@@ -324,11 +351,13 @@ fn config() -> (String, String, u32, u32, bool, f32, bool, bool, bool, String) {
     println!("Vertex Shader:   {:?}", vertex);
     println!("Screen Width:    {:?}", screen_width);
     println!("Screen Height:   {:?}", screen_height);
+    println!("MSAA:            {:?}x", config_msaa);
     println!("VSync:           {:?}", config_vsync);
     println!("Time:            {:?}", config_time);
     println!("Interactive:     {:?}", config_interactive);
     println!("Debug:           {:?}", config_debug);
     println!("Reload:          {:?}", config_reload);
+    println!("Borderless:      {:?}", config_borderless);
     println!("=======================================");
 
     println!("\n");
@@ -351,7 +380,7 @@ fn config() -> (String, String, u32, u32, bool, f32, bool, bool, bool, String) {
 
     println!("\n");
 
-    (frag, vertex, screen_width, screen_height, config_vsync, config_time, config_interactive, config_debug, config_reload, frag_name)
+    (frag, vertex, screen_width, screen_height, config_vsync, config_time, config_interactive, config_debug, config_reload, frag_name, config_msaa, config_borderless)
 }
 
 fn read_shader(file: String) -> String {
@@ -359,4 +388,45 @@ fn read_shader(file: String) -> String {
     let mut contents = String::new();
     let _ = file.read_to_string(&mut contents).unwrap();
     contents
+}
+
+fn print_opengl_info(display: &glium::Display) {
+    let version = *display.get_opengl_version();
+    let api = match version {
+        Version(Api::Gl, _, _) => "OpenGL",
+        Version(Api::GlEs, _, _) => "OpenGL ES"
+    };
+
+    println!("{} context verson: {}", api, display.get_opengl_version_string());
+
+    print!("{} context flags:", api);
+    if display.is_forward_compatible() {
+        print!(" forward-compatible");
+    }
+    if display.is_debug() {
+        print!(" debug");
+    }
+    if display.is_robust() {
+        print!(" robustness");
+    }
+    print!("\n");
+
+    if version >= Version(Api::Gl, 3, 2) {
+        println!("{} profile mask: {}", api,
+                 match display.get_opengl_profile() {
+                     Some(Profile::Core) => "core",
+                     Some(Profile::Compatibility) => "compatibility",
+                     None => "unknown"
+                 });
+    }
+
+    println!("{} robustness strategy: {}", api,
+             if display.is_context_loss_possible() {
+                 "lose"
+             } else {
+                 "none"
+             });
+    
+    println!("{} context renderer: {}", api, display.get_opengl_renderer_string());
+    println!("{} context vendor: {}", api, display.get_opengl_vendor_string());
 }
