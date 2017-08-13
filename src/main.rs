@@ -38,11 +38,12 @@ fn main() {
     let frag_name = config.9;
     let msaa = config.10;
     let borderless = config.11;
+    let fullscreen = config.12;
 
     let (tx, rx) = mpsc::channel();
     let (shader_sender, shader_receiver) = mpsc::channel();
 
-    let gl_thread = thread::spawn(move || setup_window(resolution, add_time, vsync, vertex_shader, fragment_shader, rx, shader_receiver, debug, msaa, borderless));
+    let gl_thread = thread::spawn(move || setup_window(resolution, add_time, vsync, vertex_shader, fragment_shader, rx, shader_receiver, debug, msaa, borderless, fullscreen));
 
     if interactive {
         let _ = thread::spawn(move || run_interactive(debug, tx));
@@ -107,8 +108,8 @@ fn run_watcher(file: String, shader_sender: mpsc::Sender<String>) {
     }
 }
 
-fn setup_window(resolution: [u32; 2], add_time: f32, vsync: bool, vertex_shader: String, fragment_shader: String, rx: mpsc::Receiver<i32>, shader_receiver: mpsc::Receiver<String>, debug: bool, msaa: u16, borderless: bool) {
-    let mut window = window::Window::new(resolution, "yolo".to_owned(), vsync, msaa, borderless);
+fn setup_window(resolution: [u32; 2], add_time: f32, vsync: bool, vertex_shader: String, fragment_shader: String, rx: mpsc::Receiver<i32>, shader_receiver: mpsc::Receiver<String>, debug: bool, msaa: u16, borderless: bool, fullscreen: bool) {
+    let mut window = window::Window::new(resolution, "yolo".to_owned(), vsync, msaa, borderless, fullscreen);
     let display = window.build_display();
 
     if debug {
@@ -209,7 +210,7 @@ fn setup_window(resolution: [u32; 2], add_time: f32, vsync: bool, vertex_shader:
     }
 }
 
-fn config() -> (String, String, u32, u32, bool, f32, bool, bool, bool, String, u16, bool) {
+fn config() -> (String, String, u32, u32, bool, f32, bool, bool, bool, String, u16, bool, bool) {
     let matches = App::new("yolo")
         .args(&[
             Arg::with_name("vert")
@@ -261,6 +262,10 @@ fn config() -> (String, String, u32, u32, bool, f32, bool, bool, bool, String, u
                     .help("Open borderless?")
                     .short("l")
                     .long("borderless"),
+            Arg::with_name("fullscreen")
+                    .help("fullscreen?")
+                    .short("f")
+                    .long("fullscreen"),
             Arg::with_name("frag")
                     .help("the fragment shader to load")
                     .index(1)
@@ -344,6 +349,12 @@ fn config() -> (String, String, u32, u32, bool, f32, bool, bool, bool, String, u
         config_borderless = true;
     }
 
+    let mut config_fullscreen = false;
+    if matches.is_present("fullscreen") {
+        println!("fullscreen mode enabled!");
+        config_fullscreen = true;
+    }
+
     println!("\n");
 
     println!("=======================================");
@@ -358,6 +369,7 @@ fn config() -> (String, String, u32, u32, bool, f32, bool, bool, bool, String, u
     println!("Debug:           {:?}", config_debug);
     println!("Reload:          {:?}", config_reload);
     println!("Borderless:      {:?}", config_borderless);
+    println!("Fullscreen:      {:?}", config_fullscreen);
     println!("=======================================");
 
     println!("\n");
@@ -380,7 +392,7 @@ fn config() -> (String, String, u32, u32, bool, f32, bool, bool, bool, String, u
 
     println!("\n");
 
-    (frag, vertex, screen_width, screen_height, config_vsync, config_time, config_interactive, config_debug, config_reload, frag_name, config_msaa, config_borderless)
+    (frag, vertex, screen_width, screen_height, config_vsync, config_time, config_interactive, config_debug, config_reload, frag_name, config_msaa, config_borderless, config_fullscreen)
 }
 
 fn read_shader(file: String) -> String {
